@@ -1,0 +1,46 @@
+#include <stdio.h>
+#include "ohos_init.h"
+#include "cmsis_os2.h"
+#include "hal_bsp_ap3216c.h"
+
+#define AP3216C_STACK_SIZE 2048
+
+/**
+ * ir 人体红外传感器
+ * als 光强传感器
+ * ps 接近传感器
+ */
+void Task1(void *arg)
+{
+    (void)arg;
+    AP3216C_Init();
+    uint16_t ir = 0, als = 0, ps = 0;
+    while (1)
+    {
+        if(AP3216C_ReadData(&ir, &als, &ps) == 0)
+        {
+            printf("ir:%4d  als:%4d  ps:%4d\r\n", ir, als, ps);
+        }
+        osDelay(100);
+    }
+}
+
+static void i2c_ap3216c_demo(void)
+{
+    osThreadAttr_t options;
+    options.name = "ap3216_thread";
+    options.attr_bits = 0;
+    options.cb_mem = NULL;
+    options.cb_size = 0;
+    options.stack_mem = NULL;
+    options.stack_size = AP3216C_STACK_SIZE;
+    options.priority = osPriorityNormal;
+
+    osThreadId_t Task1_ID = osThreadNew((osThreadFunc_t)Task1, NULL, &options);
+    if (Task1_ID != NULL)
+    {
+        printf("Create ap3216 thread OK!\r\n");
+    }
+}
+
+APP_FEATURE_INIT(i2c_ap3216c_demo);

@@ -1,0 +1,132 @@
+#include "stm32f10x.h"
+#include <string.h>
+
+typedef unsigned char u8;
+
+/* 全局变量 */
+uint8_t uart_sendbuf[6];
+uint8_t USART_RX_BUF[6];
+uint8_t USART_RX_COUNT = 0;
+uint8_t CAR_buff[4];
+uint8_t uart_rec_flag = 0;
+float Target_MotorA, Target_MotorB;
+
+/* 外部函数声明，根据你的工程头文件做对应调整 */
+extern void UartWrite(uint8_t uartId, unsigned char *buf, uint16_t len);
+extern void CalculateAndControlMotors(float tarA, float tarB);
+extern void R_led_mode(void);
+extern void R_led_CLC(void);
+
+/**
+ * @brief  发送电机控制帧
+ * @param  motorA: 左轮速度，范围 -150 ~ 150
+ * @param  motorB: 右轮速度，范围 -150 ~ 150
+ */
+void stm32motor_control(int motorA, int motorB)
+{
+    uint8_t A_dir = 0;
+    uint8_t B_dir = 0;
+    //小车运动方向 前进（正转）：0  后退（反转） 1
+    if(motorA < 0){
+        A_dir = 1;
+        motorA = -motorA;
+    }else{
+        A_dir = 0;
+    }
+    if(motorB < 0){
+        B_dir = 1;
+        motorB = -motorB;
+    }else{
+        B_dir = 0;
+    }
+    //限制幅度 0 ~150
+    if (motorA > 150)
+    {
+        motorA = 150;
+    }
+    if (motorB > 150)
+    {
+        motorB = 150;
+    }
+    // 数据协议 帧头0xFC，帧尾0xFD
+    uart_sendbuf[0] = 0xFC;  // 帧头
+    uart_sendbuf[1] = A_dir;  // 左轮方向   0正转，1反转
+    uart_sendbuf[2] = motorA;// 左轮速度
+    uart_sendbuf[3] = B_dir; // 右轮方向   0正转，1反转
+    uart_sendbuf[4] = motorB;// 右轮速度
+    uart_sendbuf[5] = 0xFD;  // 帧尾
+    UartWrite(2, (unsigned char *)uart_sendbuf, 6);
+}
+
+/**
+ * @brief  USART1串口接收中断服务函数
+ */
+void USART1_IRQHandler(void)
+{
+    u8 Res;
+    if(USART_GetITStatus(USART1, USART_IT_RXNE) != RESET)
+    {
+        Res = USART_ReceiveData(USART1); //读取接收到的数据
+
+        if(USART_RX_BUF[0]==0xFC)
+        {
+            // 防止数组越界，最大存6字节
+            if(USART_RX_COUNT < 6)
+            {
+                USART_RX_BUF[USART_RX_COUNT++] = Res;
+            }
+            else
+            {
+                // 溢出直接重置接收状态
+                USART_RX_COUNT = 0;
+                memset(USART_RX_BUF,0,6);
+            }
+        }
+        else
+        {
+            USART_RX_COUNT = 0;
+        }
+
+        if(USART_RX_COUNT >= 6 && USART_RX_BUF[5]==0xFD)           //得到帧尾，完整一帧
+        {
+            USART_RX_COUNT = 0;
+            CAR_buff[0] = USART_RX_BUF[1];         //方向A
+            CAR_buff[1] = USART_RX_BUF[2];         //电机A
+            CAR_buff[2] = USART_RX_BUF[3];         //方向B
+            CAR_buff[3] = USART_RX_BUF[4];         //电机B
+            memset(USART_RX_BUF, 0, 6);
+            uart_rec_flag = 1;                     //串口帧标志
+        }
+        USART_ClearITPendingBit(USART1, USART_IT_RXNE);
+    }
+}
+
+/**
+ * @brief  系统控制逻辑，放在while(1)主循环调用
+ */
+void System_Control(void)
+{
+    //******获取解析数据帧*******
+    if(uart_rec_flag)                     //收到一帧数据
+    {
+        Target_MotorA = CAR_buff[1] / 100.00f; //左轮转速绝对值
+        Target_MotorB = CAR_buff[3] / 100.00f; //右轮转速绝对值
+        //转速值还原正负
+        if(CAR_buff[0]==1){
+            Target_MotorA = -1 * Target_MotorA;
+        }
+        if(CAR_buff[2]==1){
+            Target_MotorB = -1 * Target_MotorB;
+        }
+        //倒车灯：两轮都反转时点亮
+        if(CAR_buff[0]==1 && CAR_buff[2]==1)
+        {
+            R_led_mode();
+        }else{
+            R_led_CLC();
+        }
+        uart_rec_flag = 0;
+        memset(CAR_buff, 0, 4); //清除 等待获取下一帧
+    }
+    CalculateAndControlMotors(Target_MotorA, Target_MotorB);// 设置转速 pid介入
+}
